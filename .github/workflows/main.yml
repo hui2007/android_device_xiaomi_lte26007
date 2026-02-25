@@ -1,65 +1,49 @@
-name: Build TWRP & Publish to Release
+name: Build TWRP for lte26007
 
-# 触发条件：手动触发（推荐，编译耗时较长）
 on:
-  workflow_dispatch:
-
-# 配置权限：需要读写仓库、创建 Release 的权限
-permissions:
-  contents: write
+  push:
+    branches: [ main ]  # 触发分支，可根据你的实际分支修改
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:      # 允许手动触发
 
 jobs:
-  build-twrp:
+  build:
     runs-on: ubuntu-latest
     steps:
-      # 步骤1：检出代码
-      - name: Checkout Repository
+      - name: Checkout device tree
         uses: actions/checkout@v4
-
-      - name: Fix Snap Firefox Hang (Disable Snap)
-        run: |
-          sudo systemctl stop snapd.socket snapd.service
-          sudo apt purge -y snapd firefox
-          sudo apt-mark hold firefox
-          echo "Snap and Firefox removed successfully."
-          sudo dpkg --add-architecture i386
-      # 步骤2：编译 TWRP（核心步骤）
-      - name: Build TWRP Recovery
-        uses: mlm-games/TWRP-recovery-build-action@v1.1
         with:
-          DEVICE_TREE: https://github.com/hui2007/android_device_xiaomi_lte26007  # 替换为你的设备树地址
-      # 步骤3：查找编译产物（TWRP 镜像文件）
-      - name: Locate TWRP Build Output
-        id: find_artifact
-        run: |
-          # 查找编译好的 recovery 镜像（适配常见的输出路径）
-          ARTIFACT_PATH=$(find ./out/target/product/${{ github.event.inputs.device_name }} -name "recovery.img" -type f | head -n1)
-          # 查找 boot.img（部分设备 TWRP 打包在 boot 中）
-          if [ -z "$ARTIFACT_PATH" ]; then
-            ARTIFACT_PATH=$(find ./out/target/product/${{ github.event.inputs.device_name }} -name "boot.img" -type f | head -n1)
-          fi
-          # 输出路径到环境变量，供后续步骤使用
-          echo "ARTIFACT_PATH=$ARTIFACT_PATH" >> $GITHUB_OUTPUT
-          # 定义压缩包名称（包含设备名和时间戳，避免重复）
-          ZIP_NAME="TWRP-${{ github.event.inputs.device_name }}-$(date +%Y%m%d-%H%M%S).zip"
-          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_OUTPUT
-          # 打包镜像文件为 ZIP（方便下载）
-          zip $ZIP_NAME $ARTIFACT_PATH
-          echo "打包完成：$ZIP_NAME"
+          path: android_device_xiaomi_lte26007
 
-      # 步骤4：创建 GitHub Release 并上传产物
-      - name: Create Release & Upload Artifact
-        uses: softprops/action-gh-release@v2
+      - name: Set up build environment
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev openjdk-8-jdk
+
+      - name: Sync TWRP source
+        run: |
+          mkdir -p ~/twrp
+          cd ~/twrp
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-11
+          repo sync -j$(nproc) --force-sync
+
+      - name: Link device tree
+        run: |
+          cd ~/twrp
+          mkdir -p device/xiaomi
+          ln -s $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
+
+      - name: Build TWRP
+        run: |
+          cd ~/twrp
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          lunch omni_lte26007-eng
+          mka recoveryimage
+
+      - name: Upload recovery image
+        uses: actions/upload-artifact@v4
         with:
-          # Release 标题（包含设备名和日期）
-          name: TWRP-${{ github.event.inputs.device_name }}-$(date +%Y%m%d)
-          # Release 标签（唯一标识，用设备名+时间戳）
-          tag_name: twrp-${{ github.event.inputs.device_name }}-$(date +%Y%m%d-%H%M%S)
-          # 上传的文件路径（即刚才打包的 ZIP 文件）
-          files: ${{ steps.find_artifact.outputs.ZIP_NAME }}
-          # 可选：设置为预发布（避免误触正式发布）
-          prerelease: true
-          # 可选：Release 描述
-          body: |
-            TWRP Recovery 编译产物
-            编译时间：$(date +%Y-%m-%d %H:%M:%S)
+          name: twrp-recovery
+          path: ~/twrp/out/target/product/lte26007/recovery.img
