@@ -42,7 +42,7 @@ jobs:
          git config --global url."https://github.com/".insteadOf git@github.com:
          git config --global url."https://".insteadOf git://
          mkdir -p ~/twrp && cd ~/twrp
-         repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-12.1
+         repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
          repo sync -j$(nproc) --no-clone-bundle --force-sync
 
       # 步骤4：克隆当前设备树到源码目录
