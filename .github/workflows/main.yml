@@ -9,7 +9,7 @@ on:
 
 jobs:
   build-twrp:
-    runs-on: ubuntu-latest  # 严格使用latest（Ubuntu 22.04）
+    runs-on: ubuntu-latest
     timeout-minutes: 180
 
     steps:
@@ -19,59 +19,43 @@ jobs:
           path: android_device_xiaomi_lte26007
           fetch-depth: 1
 
-      # 核心步骤：补全Ubuntu 22.04缺失的32位依赖库
       - name: Fix 32-bit Dependencies for Ubuntu 22.04
         run: |
-          # 1. 添加i386架构支持（32位）
           sudo dpkg --add-architecture i386
           sudo apt update -y
-
-          # 2. 安装密钥并添加旧版库源（解决lib32ncurses5-dev缺失）
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 40976EAF437D05B5
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
-          echo "deb http://archive.ubuntu.com/ubuntu jammy main universe multiverse" | sudo tee -a /etc/apt/sources.list
-          echo "deb http://archive.ubuntu.com/ubuntu jammy-updates main universe multiverse" | sudo tee -a /etc/apt/sources.list
-          sudo apt update -y
-
-          # 3. 修复依赖破损（避免安装时冲突）
-          sudo apt install -y --fix-broken
-
-          # 4. 安装编译TWRP 11所需的全部依赖（含32位库）
           sudo apt install -y \
             bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
-            git gnupg gperf imagemagick lib32ncurses5-dev:i386 lib32readline-dev:i386 lib32z1-dev:i386 \
-            liblz4-tool libncurses5:i386 libncurses5-dev:i386 libsdl1.2-dev:i386 libssl-dev libxml2 \
-            libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip \
-            zlib1g-dev:i386 openjdk-8-jdk
+            git gnupg gperf imagemagick lib32ncurses-dev lib32readline8 lib32z1-dev \
+            liblz4-tool libncurses-dev libssl-dev libxml2 libxml2-utils lzop \
+            pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev:i386 \
+            openjdk-8-jdk
+          # 创建软链接兼容旧版编译脚本
+          sudo ln -s /usr/lib32/libncurses.so /usr/lib32/libncurses.so.5
+          sudo ln -s /usr/lib32/libreadline.so /usr/lib32/libreadline.so.6
 
-      # 同步TWRP 11源码（适配你的32位设备树）
       - name: Sync TWRP 11 Source Code
         run: |
           mkdir -p ~/twrp-11
           cd ~/twrp-11
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-11 --depth=1
           repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
-      # 链接设备树
       - name: Link Device Tree to Source
         run: |
           cd ~/twrp-11
           mkdir -p device/xiaomi
           ln -s $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
 
-      # 编译TWRP（保留32位适配的环境变量）
       - name: Build TWRP Recovery Image
         run: |
           cd ~/twrp-11
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
-          # 强制指定32位编译环境，避免22.04默认64位导致的兼容问题
           export TARGET_ARCH=arm
           export TARGET_CPU_ABI=armeabi-v7a
           lunch omni_lte26007-eng
           mka -j$(nproc --all) recoveryimage
 
-      # 上传产物
       - name: Upload Recovery Image
         uses: actions/upload-artifact@v4
         with:
