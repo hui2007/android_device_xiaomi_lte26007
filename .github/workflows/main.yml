@@ -1,4 +1,4 @@
-name: Build TWRP for lte26007 (Fixed)
+name: Build TWRP for lte26007 (Fixed Omni Vendor)
 
 on:
   push:
@@ -29,7 +29,6 @@ jobs:
             liblz4-tool libncurses-dev libssl-dev libxml2 libxml2-utils lzop \
             pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev:i386 \
             openjdk-8-jdk
-          # 创建软链接兼容旧版编译脚本
           sudo ln -s /usr/lib32/libncurses.so /usr/lib32/libncurses.so.5
           sudo ln -s /usr/lib32/libreadline.so /usr/lib32/libreadline.so.6
 
@@ -41,32 +40,51 @@ jobs:
           export REPO_PYTHON=/usr/bin/python3
           echo "REPO_PYTHON=/usr/bin/python3" >> $GITHUB_ENV
 
-      - name: Sync TWRP 11 Source Code
+      - name: Cache TWRP Source Code
+        uses: actions/cache@v4
+        id: cache-twrp
+        with:
+          path: ~/twrp-11
+          key: twrp-11-source-omni-${{ github.sha }}
+          restore-keys: |
+            twrp-11-source-omni-
+
+      # ===================== 修正后的同步步骤，添加 OmniROM vendor =====================
+      - name: Sync TWRP 11 Source with Omni Vendor
+        if: steps.cache-twrp.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/twrp-11
           cd ~/twrp-11
+          # 1. 初始化 TWRP 源码树
           repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+          # 2. 创建 local_manifests 目录，用于添加额外仓库
+          mkdir -p .repo/local_manifests
+          # 3. 创建 manifest 文件，添加 OmniROM vendor 仓库
+          cat > .repo/local_manifests/omni.xml << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <remote name="omni" fetch="https://github.com/omnirom" />
+            <project name="android_vendor_omni" path="vendor/omni" remote="omni" revision="android-11.0" />
+          </manifest>
+          EOF
+          # 4. 同步源码，现在会自动拉取 OmniROM vendor
           repo sync -j4 --force-sync --no-clone-bundle --no-tags
+      # ================================================================================
 
-      # ===================== 修正后的关键步骤 =====================
       - name: Link and Verify Device Tree
         run: |
           cd ~/twrp-11
-          # 1. 确保目录存在
           mkdir -p device/xiaomi
-          # 2. 复制（而非链接）设备树，避免符号链接问题
           cp -r $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
-          # 3. 强制检查关键文件是否存在
-          ls -la device/xiaomi/lte26007/
-          if [ ! -f device/xiaomi/lte26007/AndroidProducts.mk ]; then
-            echo "Error: AndroidProducts.mk not found!"
+          # 检查关键文件是否存在
+          if [ ! -f vendor/omni/config/common.mk ]; then
+            echo "Error: vendor/omni/config/common.mk not found!"
             exit 1
           fi
           if [ ! -f device/xiaomi/lte26007/omni_lte26007.mk ]; then
             echo "Error: omni_lte26007.mk not found!"
             exit 1
           fi
-      # ==========================================================
 
       - name: Build TWRP Recovery Image
         run: |
@@ -75,7 +93,6 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export TARGET_ARCH=arm
           export TARGET_CPU_ABI=armeabi-v7a
-          # 禁用 nsjail 沙箱，避免干扰
           export USE_NSJAIL=false
           lunch omni_lte26007-eng
           mka -j2 recoveryimage
@@ -83,6 +100,6 @@ jobs:
       - name: Upload Recovery Image
         uses: actions/upload-artifact@v4
         with:
-          name: TWRP-lte26007-Fixed
+          name: TWRP-lte26007-OmniFixed
           path: ~/twrp-11/out/target/product/lte26007/recovery.img
           retention-days: 30
