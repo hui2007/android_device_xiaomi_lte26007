@@ -1,31 +1,85 @@
-# 给 workflow 命名，方便在 Actions 面板识别
-name: Build TWRP Recovery
+name: Build TWRP for Redmi 2A (lte26007)
 
-# 触发条件：手动触发 + 推送到 main 分支时触发（可根据需求修改）
+# 触发条件：推送到main分支、手动触发、定时每周构建（可选）
 on:
-  workflow_dispatch:  # 手动触发（推荐，方便调试
+  workflow_dispatch:  # 允许手动触发
+# 构建权限配置
+permissions:
+  contents: write  # 允许上传构建产物到Release
 
-# 定义执行的任务
 jobs:
   build-twrp:
-    # 运行环境：选择 Ubuntu 最新版（TWRP 编译需要 Linux 环境）
-    runs-on: ubuntu-latest
-    
+    runs-on: ubuntu-20.04  # 使用Ubuntu 20.04（兼容性更好）
     steps:
-      # 第一步：检出代码（GitHub Actions 必备步骤，获取仓库文件）
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-      
-      # 第二步：运行 TWRP 编译 Action（修复后的核心配置）
-      - name: TWRP Build Action
-        uses: mlm-games/TWRP-recovery-build-action@v1.1
+      # 步骤1：设置构建环境（安装依赖）
+      - name: Install build dependencies
+        run: |
+          sudo apt update -y
+          sudo apt upgrade -y
+          sudo apt install -y \
+            git-core python3 python3-pip build-essential zip curl \
+            libncurses5-dev zlib1g-dev libc6-dev lib32ncurses5-dev \
+            x11proto-core-dev libx11-dev lib32z1-dev libgl1-mesa-dev \
+            g++-multilib tofrodos python3-markdown libxml2-utils \
+            xsltproc bc cpio flex bison imagemagick libssl-dev \
+            repo openjdk-8-jdk  # 必须用JDK 8，高版本会报错
+
+      # 步骤2：配置Git（避免repo同步报错）
+      - name: Configure Git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      # 步骤3：同步TWRP源码（twrp-6.0分支，适配Android 6.0）
+      - name: Sync TWRP source code
+        run: |
+          mkdir -p ~/twrp && cd ~/twrp
+          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-12.1
+          repo sync -j$(nproc) --no-clone-bundle  # 加速同步
+
+      # 步骤4：克隆当前设备树到源码目录
+      - name: Clone device tree
+        run: |
+          cd ~/twrp
+          git clone $GITHUB_WORKSPACE device/xiaomi/lte26007  # 关联当前仓库
+
+      # 步骤5：开始编译TWRP镜像
+      - name: Build recovery image
+        run: |
+          cd ~/twrp
+          source build/envsetup.sh
+          lunch omni_lte26007-eng
+          make recoveryimage -j$(nproc)
+
+      # 步骤6：检查编译产物并打包
+      - name: Prepare artifact
+        run: |
+          # 创建输出目录
+          mkdir -p ~/output
+          # 复制编译好的recovery.img
+          cp ~/twrp/out/target/product/lte26007/recovery.img ~/output/twrp-lte26007-$(date +%Y%m%d).img
+          # 生成md5校验文件
+          cd ~/output && md5sum *.img > md5sum.txt
+
+      # 步骤7：上传构建产物到GitHub Artifacts（临时存储，保留90天）
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          # TWRP 清单分支（使用默认的 twrp-12.1，可根据需求修改）
-          MANIFEST_BRANCH: twrp-12.1
-          
-          # 设备树仓库地址（必填：替换为你的设备树 GitHub 地址，如 https://github.com/你的用户名/设备树仓库名）
-          DEVICE_TREE: https://github.com/hui2007/android_device_xiaomi_lte26007  # 或手动写死：https://github.com/xxx/xxx-device-tree
-          
-          # 设备树分支（可选：不写则用仓库默认分支，如需指定则赋值，如 main）
-          DEVICE_TREE_BRANCH: full_lte26007-user-4.4.4-KTU84Q-V6.6.5.0.KHLCNCF-release-keys
-        
+          name: twrp-lte26007-build
+          path: ~/output/
+
+      # 步骤8：创建Release并上传产物（可选，仅手动/定时触发时执行）
+      - name: Create Release and upload assets
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: twrp-build-${{ github.run_id }}
+          name: TWRP Build ${{ github.run_id }} 
+          body: |
+            Auto-built TWRP recovery for Redmi 2A (lte26007)
+            - Commit: ${{ github.sha }}
+          files: |
+            ~/output/*.img
+            ~/output/md5sum.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # GitHub自动生成的令牌，无需手动配置
