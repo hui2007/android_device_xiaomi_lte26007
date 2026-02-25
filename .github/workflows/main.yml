@@ -15,7 +15,12 @@ jobs:
       # 步骤1：检出代码
       - name: Checkout Repository
         uses: actions/checkout@v4
-
+      - name: Fix Snap Firefox Hang (Disable Snap)
+        run: |
+          sudo systemctl stop snapd.socket snapd.service
+          sudo apt purge -y snapd firefox
+          sudo apt-mark hold firefox
+          echo "Snap and Firefox removed successfully."
       # 步骤2：编译 TWRP（核心步骤）
       - name: Build TWRP Recovery
         uses: mlm-games/TWRP-recovery-build-action@v1.1
