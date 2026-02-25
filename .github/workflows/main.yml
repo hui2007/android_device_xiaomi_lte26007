@@ -54,8 +54,9 @@ jobs:
         run: |
           mkdir -p ~/twrp-11-full
           cd ~/twrp-11-full
-          # 初始化TWRP 11全源码（清华镜像源提升成功率）
-          repo init -u https://mirrors.tuna.tsinghua.edu.cn/git/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+          # ========== 修正：换回 GitHub 官方地址 ==========
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+          # ==============================================
           
           # ========== 关键修复：添加OmniROM vendor仓库到manifest ==========
           mkdir -p .repo/local_manifests
