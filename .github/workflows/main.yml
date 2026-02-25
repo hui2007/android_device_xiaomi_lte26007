@@ -1,4 +1,4 @@
-name: Build TWRP for lte26007 (ubuntu-latest)
+name: Build TWRP for lte26007 (Final)
 
 on:
   push:
@@ -33,12 +33,29 @@ jobs:
           sudo ln -s /usr/lib32/libncurses.so /usr/lib32/libncurses.so.5
           sudo ln -s /usr/lib32/libreadline.so /usr/lib32/libreadline.so.6
 
+      # ===================== 新增核心步骤：安装 Repo 工具 =====================
+      - name: Install Repo Tool
+        run: |
+          # 下载 repo 脚本
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          # 赋予执行权限
+          chmod a+x ~/repo
+          # 移动到系统可执行路径
+          sudo mv ~/repo /usr/bin/
+          # 配置 repo 环境（避免Python版本警告）
+          export REPO_PYTHON=/usr/bin/python3
+          echo "REPO_PYTHON=/usr/bin/python3" >> $GITHUB_ENV
+
+      # ======================================================================
+
       - name: Sync TWRP 11 Source Code
         run: |
           mkdir -p ~/twrp-11
           cd ~/twrp-11
+          # 现在 repo 命令已可用
           repo init -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-11 --depth=1
-          repo sync -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+          # 建议限制线程数为 4，避免 GitHub 网络限制导致同步失败
+          repo sync -j4 --force-sync --no-clone-bundle --no-tags
 
       - name: Link Device Tree to Source
         run: |
@@ -54,11 +71,12 @@ jobs:
           export TARGET_ARCH=arm
           export TARGET_CPU_ABI=armeabi-v7a
           lunch omni_lte26007-eng
-          mka -j$(nproc --all) recoveryimage
+          # 限制编译线程为 2，防止内存不足 (OOM)
+          mka -j2 recoveryimage
 
       - name: Upload Recovery Image
         uses: actions/upload-artifact@v4
         with:
-          name: TWRP-lte26007-arm-ubuntu-latest
+          name: TWRP-lte26007-Final
           path: ~/twrp-11/out/target/product/lte26007/recovery.img
           retention-days: 30
