@@ -1,4 +1,4 @@
-name: Build TWRP for lte26007 (Fixed Omni Vendor)
+name: Build TWRP for lte26007 (Fixed Omni Branch)
 
 on:
   push:
@@ -45,30 +45,30 @@ jobs:
         id: cache-twrp
         with:
           path: ~/twrp-11
-          key: twrp-11-source-omni-${{ github.sha }}
+          key: twrp-11-source-omni-fixed-${{ github.sha }}
           restore-keys: |
-            twrp-11-source-omni-
+            twrp-11-source-omni-fixed-
 
-      # ===================== 修正后的同步步骤，添加 OmniROM vendor =====================
+      # ===================== 修正后的同步步骤，使用正确的 Omni 分支 =====================
       - name: Sync TWRP 11 Source with Omni Vendor
         if: steps.cache-twrp.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/twrp-11
           cd ~/twrp-11
           # 1. 初始化 TWRP 源码树
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-          # 2. 创建 local_manifests 目录，用于添加额外仓库
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-11 --depth=1
+          # 2. 创建 local_manifests 目录
           mkdir -p .repo/local_manifests
-          # 3. 创建 manifest 文件，添加 OmniROM vendor 仓库
+          # 3. 创建 manifest 文件，修正 OmniROM 分支为 android-11
           cat > .repo/local_manifests/omni.xml << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
             <remote name="omni" fetch="https://github.com/omnirom" />
-            <project name="android_vendor_omni" path="vendor/omni" remote="omni" revision="android-11.0" />
+            <project name="android_vendor_omni" path="vendor/omni" remote="omni" revision="android-11" />
           </manifest>
           EOF
-          # 4. 同步源码，现在会自动拉取 OmniROM vendor
-          repo sync -j4 --force-sync --no-clone-bundle --no-tags
+          # 4. 同步源码，使用 -j1 单线程提高稳定性
+          repo sync -j1 --force-sync --no-clone-bundle --no-tags
       # ================================================================================
 
       - name: Link and Verify Device Tree
@@ -100,6 +100,6 @@ jobs:
       - name: Upload Recovery Image
         uses: actions/upload-artifact@v4
         with:
-          name: TWRP-lte26007-OmniFixed
+          name: TWRP-lte26007-OmniBranchFixed
           path: ~/twrp-11/out/target/product/lte26007/recovery.img
           retention-days: 30
