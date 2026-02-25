@@ -70,7 +70,7 @@ jobs:
           # ==============================================================
           
           # 强力同步：10次重试+5分钟超时，确保源码下载完成
-          repo sync -j1 --retry-fetches=10 --timeout=300 --force-sync --no-clone-bundle --no-tags --quiet
+          repo sync -j1 --retry-fetches=10 --force-sync --no-clone-bundle --no-tags --quiet
           
           # 验证核心文件（不终止任务，优先缓存源码）
           if [ -f vendor/omni/config/common.mk ]; then
