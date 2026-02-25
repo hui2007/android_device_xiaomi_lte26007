@@ -8,86 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ========== Job 1：仅同步源码并强制缓存（核心修复：添加Omni仓库） ==========
-  sync-source:
-    runs-on: ubuntu-latest
-    timeout-minutes: 240  # 给足同步时间（全源码约15-30分钟）
-    outputs:
-      cache_key: ${{ steps.cache-twrp-full.outputs.cache-primary-key }}  # 传递缓存Key给编译Job
-
-    steps:
-      - name: Checkout Device Tree
-        uses: actions/checkout@v4
-        with:
-          path: android_device_xiaomi_lte26007
-          fetch-depth: 1
-
-      # 初始化缓存：无论是否命中，同步后都强制存储
-      - name: Cache TWRP Full Source Code
-        id: cache-twrp-full
-        uses: actions/cache@v4
-        with:
-          path: ~/twrp-11-full
-          key: twrp-11-full-source-force-${{ github.sha }}
-          restore-keys: |
-            twrp-11-full-source-force-
-
-      # 安装同步所需基础依赖
-      - name: Install Dependencies for Sync
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt update -y
-          sudo apt install -y --fix-broken
-          # 仅安装同步必需依赖，精简耗时
-          sudo apt install -y \
-            git curl bc bison build-essential gcc-multilib g++-multilib \
-            lib32ncurses-dev lib32readline8 lib32z1-dev zlib1g-dev:i386
-          # 安装Repo工具并配置Python3
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
-          chmod a+x ~/repo
-          sudo mv ~/repo /usr/bin/
-          export REPO_PYTHON=/usr/bin/python3
-          echo "REPO_PYTHON=/usr/bin/python3" >> $GITHUB_ENV
-
-      # 强制同步全源码（核心修复：添加OmniROM vendor仓库）
-      - name: Force Sync TWRP 11 Full Source Tree
-        run: |
-          mkdir -p ~/twrp-11-full
-          cd ~/twrp-11-full
-          # ========== 修正：换回 GitHub 官方地址 ==========
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-          # ==============================================
-          
-          # ========== 关键修复：添加OmniROM vendor仓库到manifest ==========
-          mkdir -p .repo/local_manifests
-          cat > .repo/local_manifests/omni.xml << 'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <manifest>
-            <remote name="omni" fetch="https://github.com/omnirom" />
-            <project name="android_vendor_omni" path="vendor/omni" remote="omni" revision="android-11" />
-          </manifest>
-          EOF
-          # ==============================================================
-          
-          # 强力同步：10次重试+5分钟超时，确保源码下载完成
-          repo sync -j1 --retry-fetches=10 --force-sync --no-clone-bundle --no-tags --quiet
-          
-          # 验证核心文件（不终止任务，优先缓存源码）
-          if [ -f vendor/omni/config/common.mk ]; then
-            echo "✅ 源码同步完成，Omni vendor 存在！"
-          else
-            echo "⚠️  Omni vendor 同步失败，但已缓存当前源码，后续可手动补全"
-          fi
-
-      # 强制标记缓存更新（确保任务结束后存储缓存）
-      - name: Mark Cache for Update
-        run: |
-          touch ~/twrp-11-full/.sync_completed  # 写空文件触发缓存存储
-          echo "✅ 缓存标记已添加，源码缓存将被存储"
-
-  # ========== Job 2：复用缓存编译（失败不影响已存储的源码缓存） ==========
   build-twrp:
-    needs: sync-source  # 依赖Job1完成
+    # 依赖Job1完成
     runs-on: ubuntu-latest
     timeout-minutes: 180
 
@@ -103,7 +25,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/twrp-11-full
-          key: ${{ needs.sync-source.outputs.cache_key }}
+          key: twrp-11-full-source-force-f2e6a160317bcb1c1931bb06b50809ccb33fb6f7
           restore-keys: |
             twrp-11-full-source-force-
 
