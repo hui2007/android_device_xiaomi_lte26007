@@ -1,4 +1,4 @@
-name: Build TWRP for lte26007 (Final)
+name: Build TWRP for lte26007 (Fixed)
 
 on:
   push:
@@ -33,35 +33,40 @@ jobs:
           sudo ln -s /usr/lib32/libncurses.so /usr/lib32/libncurses.so.5
           sudo ln -s /usr/lib32/libreadline.so /usr/lib32/libreadline.so.6
 
-      # ===================== 新增核心步骤：安装 Repo 工具 =====================
       - name: Install Repo Tool
         run: |
-          # 下载 repo 脚本
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
-          # 赋予执行权限
           chmod a+x ~/repo
-          # 移动到系统可执行路径
           sudo mv ~/repo /usr/bin/
-          # 配置 repo 环境（避免Python版本警告）
           export REPO_PYTHON=/usr/bin/python3
           echo "REPO_PYTHON=/usr/bin/python3" >> $GITHUB_ENV
-
-      # ======================================================================
 
       - name: Sync TWRP 11 Source Code
         run: |
           mkdir -p ~/twrp-11
           cd ~/twrp-11
-          # 现在 repo 命令已可用
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-          # 建议限制线程数为 4，避免 GitHub 网络限制导致同步失败
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-11 --depth=1
           repo sync -j4 --force-sync --no-clone-bundle --no-tags
 
-      - name: Link Device Tree to Source
+      # ===================== 修正后的关键步骤 =====================
+      - name: Link and Verify Device Tree
         run: |
           cd ~/twrp-11
+          # 1. 确保目录存在
           mkdir -p device/xiaomi
-          ln -s $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
+          # 2. 复制（而非链接）设备树，避免符号链接问题
+          cp -r $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
+          # 3. 强制检查关键文件是否存在
+          ls -la device/xiaomi/lte26007/
+          if [ ! -f device/xiaomi/lte26007/AndroidProducts.mk ]; then
+            echo "Error: AndroidProducts.mk not found!"
+            exit 1
+          fi
+          if [ ! -f device/xiaomi/lte26007/omni_lte26007.mk ]; then
+            echo "Error: omni_lte26007.mk not found!"
+            exit 1
+          fi
+      # ==========================================================
 
       - name: Build TWRP Recovery Image
         run: |
@@ -70,13 +75,14 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export TARGET_ARCH=arm
           export TARGET_CPU_ABI=armeabi-v7a
+          # 禁用 nsjail 沙箱，避免干扰
+          export USE_NSJAIL=false
           lunch omni_lte26007-eng
-          # 限制编译线程为 2，防止内存不足 (OOM)
           mka -j2 recoveryimage
 
       - name: Upload Recovery Image
         uses: actions/upload-artifact@v4
         with:
-          name: TWRP-lte26007-Final
+          name: TWRP-lte26007-Fixed
           path: ~/twrp-11/out/target/product/lte26007/recovery.img
           retention-days: 30
