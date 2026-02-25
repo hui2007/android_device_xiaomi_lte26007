@@ -50,13 +50,6 @@ jobs:
          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
          repo sync -j1 --no-clone-bundle --force-sync
 
-      # 步骤4：克隆当前设备树到源码目录
-      - name: Link device tree to source
-        run: |
-          cd ~/twrp
-          rm -rf device/xiaomi/lte26007
-          ln -s $GITHUB_WORKSPACE device/xiaomi/lte26007
-
       # 步骤5：开始编译TWRP镜像
       - name: Build recovery image
         run: |
