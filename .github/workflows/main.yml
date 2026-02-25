@@ -1,4 +1,4 @@
-name: Build TWRP for lte26007 (Fixed Omni Branch)
+name: Build TWRP for lte26007 (Fixed Soong Panic)
 
 on:
   push:
@@ -45,21 +45,17 @@ jobs:
         id: cache-twrp
         with:
           path: ~/twrp-11
-          key: twrp-11-source-omni-fixed-${{ github.sha }}
+          key: twrp-11-source-omni-soongfixed-${{ github.sha }}
           restore-keys: |
-            twrp-11-source-omni-fixed-
+            twrp-11-source-omni-soongfixed-
 
-      # ===================== 修正后的同步步骤，使用正确的 Omni 分支 =====================
       - name: Sync TWRP 11 Source with Omni Vendor
         if: steps.cache-twrp.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/twrp-11
           cd ~/twrp-11
-          # 1. 初始化 TWRP 源码树
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-          # 2. 创建 local_manifests 目录
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest.git -b twrp-11 --depth=1
           mkdir -p .repo/local_manifests
-          # 3. 创建 manifest 文件，修正 OmniROM 分支为 android-11
           cat > .repo/local_manifests/omni.xml << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <manifest>
@@ -67,16 +63,23 @@ jobs:
             <project name="android_vendor_omni" path="vendor/omni" remote="omni" revision="android-11" />
           </manifest>
           EOF
-          # 4. 同步源码，使用 -j1 单线程提高稳定性
           repo sync -j1 --force-sync --no-clone-bundle --no-tags
-      # ================================================================================
+
+      # ===================== 新增：禁用 TWRP Soong Generator =====================
+      - name: Disable TWRP Soong Generator to Fix Panic
+        run: |
+          cd ~/twrp-11
+          # 重命名 TWRP 的 generator 目录，让 soong 找不到它
+          mv vendor/twrp/build/soong/generator vendor/twrp/build/soong/generator.disabled
+          # 或者直接删除 Android.bp 中的模块定义
+          # sed -i '/twrp\/generator/,/}/d' vendor/twrp/build/soong/Android.bp
+      # ==========================================================================
 
       - name: Link and Verify Device Tree
         run: |
           cd ~/twrp-11
           mkdir -p device/xiaomi
           cp -r $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
-          # 检查关键文件是否存在
           if [ ! -f vendor/omni/config/common.mk ]; then
             echo "Error: vendor/omni/config/common.mk not found!"
             exit 1
@@ -94,12 +97,15 @@ jobs:
           export TARGET_ARCH=arm
           export TARGET_CPU_ABI=armeabi-v7a
           export USE_NSJAIL=false
+          # 强制使用旧版 make 构建系统，绕过 soong
+          export USE_SOONG=false
           lunch omni_lte26007-eng
-          mka -j2 recoveryimage
+          # 使用 make 而非 mka，避免 soong 参与
+          make -j2 recoveryimage
 
       - name: Upload Recovery Image
         uses: actions/upload-artifact@v4
         with:
-          name: TWRP-lte26007-OmniBranchFixed
+          name: TWRP-lte26007-SoongFixed
           path: ~/twrp-11/out/target/product/lte26007/recovery.img
           retention-days: 30
