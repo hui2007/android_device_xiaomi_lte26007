@@ -43,7 +43,7 @@ jobs:
          git config --global url."https://".insteadOf git://
          mkdir -p ~/twrp && cd ~/twrp
          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
-         repo sync -j4 --no-clone-bundle --force-sync --timeout=120 --retry=3
+         repo sync -j1 --no-clone-bundle --force-sync
 
       # 步骤4：克隆当前设备树到源码目录
       - name: Link device tree to source
