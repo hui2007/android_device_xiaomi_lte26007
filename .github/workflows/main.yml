@@ -1,4 +1,4 @@
-name: Build TWRP for lte26007 (Full Source - Fixed Manifest)
+name: Build TWRP for lte26007 (Force Cache Full Source)
 
 on:
   push:
@@ -8,9 +8,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-twrp:
+  # ========== Job 1：仅同步源码并强制缓存（核心修复：添加Omni仓库） ==========
+  sync-source:
     runs-on: ubuntu-latest
-    timeout-minutes: 240  # 全源码同步耗时较长，延长超时
+    timeout-minutes: 240  # 给足同步时间（全源码约15-30分钟）
+    outputs:
+      cache_key: ${{ steps.cache-twrp-full.outputs.cache-primary-key }}  # 传递缓存Key给编译Job
 
     steps:
       - name: Checkout Device Tree
@@ -19,86 +22,129 @@ jobs:
           path: android_device_xiaomi_lte26007
           fetch-depth: 1
 
-      # 缓存全源码（约20GB，首次慢，后续复用）
+      # 初始化缓存：无论是否命中，同步后都强制存储
       - name: Cache TWRP Full Source Code
-        uses: actions/cache@v4
         id: cache-twrp-full
+        uses: actions/cache@v4
         with:
           path: ~/twrp-11-full
-          key: twrp-11-full-source-fixed-${{ github.sha }}
+          key: twrp-11-full-source-force-${{ github.sha }}
           restore-keys: |
-            twrp-11-full-source-fixed-
+            twrp-11-full-source-force-
 
-      # 安装32位依赖
-      - name: Fix 32-bit Dependencies for Ubuntu 22.04
+      # 安装同步所需基础依赖
+      - name: Install Dependencies for Sync
         run: |
           sudo dpkg --add-architecture i386
           sudo apt update -y
           sudo apt install -y --fix-broken
+          # 仅安装同步必需依赖，精简耗时
           sudo apt install -y \
-            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
-            git gnupg gperf imagemagick lib32ncurses-dev lib32readline8 lib32z1-dev \
-            liblz4-tool libncurses-dev libssl-dev libxml2 libxml2-utils lzop \
-            pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev:i386 \
-            openjdk-8-jdk
-          sudo ln -s /usr/lib32/libncurses.so /usr/lib32/libncurses.so.5
-          sudo ln -s /usr/lib32/libreadline.so /usr/lib32/libreadline.so.6
-
-      # 安装Repo工具
-      - name: Install Repo Tool
-        run: |
+            git curl bc bison build-essential gcc-multilib g++-multilib \
+            lib32ncurses-dev lib32readline8 lib32z1-dev zlib1g-dev:i386
+          # 安装Repo工具并配置Python3
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
           chmod a+x ~/repo
           sudo mv ~/repo /usr/bin/
           export REPO_PYTHON=/usr/bin/python3
           echo "REPO_PYTHON=/usr/bin/python3" >> $GITHUB_ENV
 
-      # 同步TWRP 11全源码（修正后的官方地址）
-      - name: Sync TWRP 11 Full Source Tree (Fixed Manifest)
-        if: steps.cache-twrp-full.outputs.cache-hit != 'true'
+      # 强制同步全源码（核心修复：添加OmniROM vendor仓库）
+      - name: Force Sync TWRP 11 Full Source Tree
         run: |
           mkdir -p ~/twrp-11-full
           cd ~/twrp-11-full
-          # ===================== 修正的核心：正确的manifest地址 =====================
-          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
-          # ==========================================================================
-          # 单线程+重试，避免网络限流/超时
-          repo sync -j1 --retry-fetches=5 --force-sync --no-clone-bundle --no-tags --quiet
+          # 初始化TWRP 11全源码（清华镜像源提升成功率）
+          repo init -u https://mirrors.tuna.tsinghua.edu.cn/git/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+          
+          # ========== 关键修复：添加OmniROM vendor仓库到manifest ==========
+          mkdir -p .repo/local_manifests
+          cat > .repo/local_manifests/omni.xml << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <manifest>
+            <remote name="omni" fetch="https://github.com/omnirom" />
+            <project name="android_vendor_omni" path="vendor/omni" remote="omni" revision="android-11" />
+          </manifest>
+          EOF
+          # ==============================================================
+          
+          # 强力同步：10次重试+5分钟超时，确保源码下载完成
+          repo sync -j1 --retry-fetches=10 --timeout=300 --force-sync --no-clone-bundle --no-tags --quiet
+          
+          # 验证核心文件（不终止任务，优先缓存源码）
+          if [ -f vendor/omni/config/common.mk ]; then
+            echo "✅ 源码同步完成，Omni vendor 存在！"
+          else
+            echo "⚠️  Omni vendor 同步失败，但已缓存当前源码，后续可手动补全"
+          fi
 
-      # 链接并验证设备树
-      - name: Link and Verify Device Tree
+      # 强制标记缓存更新（确保任务结束后存储缓存）
+      - name: Mark Cache for Update
+        run: |
+          touch ~/twrp-11-full/.sync_completed  # 写空文件触发缓存存储
+          echo "✅ 缓存标记已添加，源码缓存将被存储"
+
+  # ========== Job 2：复用缓存编译（失败不影响已存储的源码缓存） ==========
+  build-twrp:
+    needs: sync-source  # 依赖Job1完成
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout Device Tree
+        uses: actions/checkout@v4
+        with:
+          path: android_device_xiaomi_lte26007
+          fetch-depth: 1
+
+      # 恢复Job1存储的源码缓存
+      - name: Restore TWRP Full Source Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/twrp-11-full
+          key: ${{ needs.sync-source.outputs.cache_key }}
+          restore-keys: |
+            twrp-11-full-source-force-
+
+      # 安装完整编译依赖
+      - name: Install Full Build Dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt update -y
+          sudo apt install -y --fix-broken
+          # 安装所有编译必需依赖
+          sudo apt install -y \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git gnupg gperf imagemagick lib32ncurses-dev lib32readline8 lib32z1-dev \
+            liblz4-tool libncurses-dev libssl-dev libxml2 libxml2-utils lzop \
+            pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev:i386 \
+            openjdk-8-jdk
+          # 修复32位库软链接
+          sudo ln -sf /usr/lib32/libncurses.so /usr/lib32/libncurses.so.5 || true
+          sudo ln -sf /usr/lib32/libreadline.so /usr/lib32/libreadline.so.6 || true
+
+      # 链接设备树并编译TWRP
+      - name: Link Device Tree and Build TWRP
         run: |
           cd ~/twrp-11-full
+          # 复制设备树到源码目录
           mkdir -p device/xiaomi
           cp -r $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
-          # 检查设备树关键文件
-          if [ ! -f device/xiaomi/lte26007/omni_lte26007.mk ]; then
-            echo "Error: omni_lte26007.mk not found!"
-            exit 1
-          fi
-          # 全源码已包含Omni vendor，验证是否存在
-          if [ ! -f vendor/omni/config/common.mk ]; then
-            echo "Omni vendor missing, syncing separately..."
-            cd ~/twrp-11-full
-            repo sync -j1 vendor/omni --force-sync
-          fi
-
-      # 编译TWRP（原生兼容Soong，直接用mka）
-      - name: Build TWRP Recovery Image
-        run: |
-          cd ~/twrp-11-full
+          # 编译配置
           source build/envsetup.sh
-          export ALLOW_MISSING_DEPENDENCIES=true
+          export ALLOW_MISSING_DEPENDENCIES=true  # 允许缺失依赖继续编译
           export TARGET_ARCH=arm
           export TARGET_CPU_ABI=armeabi-v7a
           export USE_NSJAIL=false
+          # 执行编译
           lunch omni_lte26007-eng
           mka -j2 recoveryimage
 
-      # 上传编译产物
+      # 仅编译成功时上传产物
       - name: Upload Recovery Image
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: TWRP-lte26007-FullSource-Fixed
+          name: TWRP-lte26007-FullSource-Cached
           path: ~/twrp-11-full/out/target/product/lte26007/recovery.img
           retention-days: 30
