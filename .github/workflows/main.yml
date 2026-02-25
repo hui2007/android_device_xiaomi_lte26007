@@ -46,10 +46,11 @@ jobs:
          repo sync -j$(nproc) --no-clone-bundle --force-sync
 
       # 步骤4：克隆当前设备树到源码目录
-      - name: Clone device tree
+      - name: Link device tree to source
         run: |
           cd ~/twrp
-          git clone $GITHUB_WORKSPACE device/xiaomi/lte26007  # 关联当前仓库
+          rm -rf device/xiaomi/lte26007
+          ln -s $GITHUB_WORKSPACE device/xiaomi/lte26007
 
       # 步骤5：开始编译TWRP镜像
       - name: Build recovery image
