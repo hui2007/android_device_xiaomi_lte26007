@@ -1,37 +1,54 @@
-name: Build TWRP for lte26007 (Fixed Soong Panic)
+name: Build TWRP for lte26007 (Final Stable Version)
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch:  # 支持手动触发
 
 jobs:
   build-twrp:
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
+    runs-on: ubuntu-latest  # 严格使用Ubuntu 22.04
+    timeout-minutes: 180    # 延长超时时间，避免编译中断
 
     steps:
+      # 1. 拉取设备树代码
       - name: Checkout Device Tree
         uses: actions/checkout@v4
         with:
           path: android_device_xiaomi_lte26007
           fetch-depth: 1
 
+      # 2. 缓存TWRP源码（优化顺序，提升复用率）
+      - name: Cache TWRP Source Code
+        uses: actions/cache@v4
+        id: cache-twrp
+        with:
+          path: ~/twrp-11
+          key: twrp-11-source-omni-soong-removed-${{ github.sha }}
+          restore-keys: |
+            twrp-11-source-omni-soong-removed-
+            twrp-11-source-omni-
+            twrp-11-source-
+
+      # 3. 安装Ubuntu 22.04缺失的32位依赖
       - name: Fix 32-bit Dependencies for Ubuntu 22.04
         run: |
           sudo dpkg --add-architecture i386
           sudo apt update -y
+          sudo apt install -y --fix-broken
           sudo apt install -y \
             bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
             git gnupg gperf imagemagick lib32ncurses-dev lib32readline8 lib32z1-dev \
             liblz4-tool libncurses-dev libssl-dev libxml2 libxml2-utils lzop \
             pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev:i386 \
             openjdk-8-jdk
+          # 创建软链接兼容旧版编译脚本
           sudo ln -s /usr/lib32/libncurses.so /usr/lib32/libncurses.so.5
           sudo ln -s /usr/lib32/libreadline.so /usr/lib32/libreadline.so.6
 
+      # 4. 安装Repo工具（解决repo: command not found）
       - name: Install Repo Tool
         run: |
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
@@ -40,21 +57,15 @@ jobs:
           export REPO_PYTHON=/usr/bin/python3
           echo "REPO_PYTHON=/usr/bin/python3" >> $GITHUB_ENV
 
-      - name: Cache TWRP Source Code
-        uses: actions/cache@v4
-        id: cache-twrp
-        with:
-          path: ~/twrp-11
-          key: twrp-11-source-omni-soongfixed-${{ github.sha }}
-          restore-keys: |
-            twrp-11-source-omni-soongfixed-
-
+      # 5. 同步TWRP 11源码+OmniROM Vendor（缓存未命中时执行）
       - name: Sync TWRP 11 Source with Omni Vendor
         if: steps.cache-twrp.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/twrp-11
           cd ~/twrp-11
+          # 初始化TWRP 11最小化源码
           repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-11 --depth=1
+          # 添加OmniROM Vendor仓库（修正分支为android-11）
           mkdir -p .repo/local_manifests
           cat > .repo/local_manifests/omni.xml << 'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
@@ -63,23 +74,25 @@ jobs:
             <project name="android_vendor_omni" path="vendor/omni" remote="omni" revision="android-11" />
           </manifest>
           EOF
+          # 单线程同步，避免网络限流
           repo sync -j1 --force-sync --no-clone-bundle --no-tags
 
-      # ===================== 新增：禁用 TWRP Soong Generator =====================
-      - name: Disable TWRP Soong Generator to Fix Panic
+      # 6. 彻底移除TWRP Soong Generator（解决panic错误）
+      - name: Remove TWRP Soong Generator to Fix Panic
         run: |
           cd ~/twrp-11
-          # 重命名 TWRP 的 generator 目录，让 soong 找不到它
-          mv vendor/twrp/build/soong/generator vendor/twrp/build/soong/generator.disabled
-          # 或者直接删除 Android.bp 中的模块定义
-          # sed -i '/twrp\/generator/,/}/d' vendor/twrp/build/soong/Android.bp
-      # ==========================================================================
+          # 删除Android.bp中对generator的引用
+          sed -i '/twrp\/generator/,/}/d' vendor/twrp/build/soong/Android.bp
+          # 删除generator目录，避免残留
+          rm -rf vendor/twrp/build/soong/generator
 
+      # 7. 链接并验证设备树（复制代替链接，避免路径问题）
       - name: Link and Verify Device Tree
         run: |
           cd ~/twrp-11
           mkdir -p device/xiaomi
           cp -r $GITHUB_WORKSPACE/android_device_xiaomi_lte26007 device/xiaomi/lte26007
+          # 前置检查关键文件，提前发现问题
           if [ ! -f vendor/omni/config/common.mk ]; then
             echo "Error: vendor/omni/config/common.mk not found!"
             exit 1
@@ -89,23 +102,27 @@ jobs:
             exit 1
           fi
 
+      # 8. 编译TWRP Recovery镜像（禁用Soong，使用传统Make）
       - name: Build TWRP Recovery Image
         run: |
           cd ~/twrp-11
           source build/envsetup.sh
+          # 环境变量配置，保证32位编译兼容
           export ALLOW_MISSING_DEPENDENCIES=true
           export TARGET_ARCH=arm
           export TARGET_CPU_ABI=armeabi-v7a
           export USE_NSJAIL=false
-          # 强制使用旧版 make 构建系统，绕过 soong
+          # 强制禁用Soong，避免冲突
           export USE_SOONG=false
+          export WITHOUT_SOONG=true
+          # 执行编译
           lunch omni_lte26007-eng
-          # 使用 make 而非 mka，避免 soong 参与
           make -j2 recoveryimage
 
+      # 9. 上传编译产物（方便下载）
       - name: Upload Recovery Image
         uses: actions/upload-artifact@v4
         with:
-          name: TWRP-lte26007-SoongFixed
+          name: TWRP-lte26007-ubuntu-latest
           path: ~/twrp-11/out/target/product/lte26007/recovery.img
-          retention-days: 30
+          retention-days: 30  # 产物保留30天
